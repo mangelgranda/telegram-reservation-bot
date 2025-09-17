@@ -11,53 +11,65 @@ const esc = (s = '') =>
 // —— Wizard (form steps) ——
 const formWizard = new Scenes.WizardScene(
   'reservation-form',
+
+  // Paso 0: pedir nombre y NO avanzar todavía (evita que /start form se tome como nombre)
   async (ctx) => {
-    ctx.wizard.state.form = {};
+    // Si ya venimos con texto del usuario y NO es un comando, lo tomamos como nombre
+    const txt = ctx.message?.text?.trim() || '';
+    const isCommand = txt.startsWith('/');
+
+    if (!ctx.wizard.state.form) ctx.wizard.state.form = {};
+
+    if (txt && !isCommand && !ctx.wizard.state.form.fullName) {
+      // Guardamos nombre y pasamos al paso de restaurante
+      ctx.wizard.state.form.fullName = txt;
+      await ctx.reply('Restaurant link (full TheFork URL):');
+      return ctx.wizard.next(); // -> Paso 1
+    }
+
+    // Si es la primera vez (o vino un comando como /start form), solo preguntamos el nombre
     await ctx.reply('Full name (to give at the restaurant):');
-    return ctx.wizard.next();
+    // NO next: nos quedamos en el paso 0 esperando la próxima respuesta con el nombre
   },
+
+  // Paso 1: restaurante
   async (ctx) => {
-    ctx.wizard.state.form.fullName = ctx.message?.text?.trim() || '';
-    if (!ctx.wizard.state.form.fullName) {
-      return ctx.reply('Please write your full name:');
-    }
-    await ctx.reply('Restaurant link (full TheFork URL):');
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
-    ctx.wizard.state.form.restaurant = ctx.message?.text?.trim() || '';
-    if (!ctx.wizard.state.form.restaurant) {
-      return ctx.reply('Please send the restaurant link (URL):');
-    }
+    const text = ctx.message?.text?.trim();
+    if (!text) return ctx.reply('Please send the restaurant link (URL):');
+
+    ctx.wizard.state.form.restaurant = text;
     await ctx.reply('Date & time (e.g., 2025-09-18 21:00):');
-    return ctx.wizard.next();
+    return ctx.wizard.next(); // -> Paso 2
   },
+
+  // Paso 2: fecha/hora
   async (ctx) => {
-    ctx.wizard.state.form.datetime = ctx.message?.text?.trim() || '';
-    if (!ctx.wizard.state.form.datetime) {
-      return ctx.reply('Please write the date & time:');
-    }
+    const text = ctx.message?.text?.trim();
+    if (!text) return ctx.reply('Please write the date & time:');
+
+    ctx.wizard.state.form.datetime = text;
     await ctx.reply('Number of guests (e.g., 2):');
-    return ctx.wizard.next();
+    return ctx.wizard.next(); // -> Paso 3
   },
+
+  // Paso 3: invitados
   async (ctx) => {
-    ctx.wizard.state.form.guests = ctx.message?.text?.trim() || '';
-    if (!ctx.wizard.state.form.guests) {
-      return ctx.reply('Please write the number of guests:');
-    }
+    const text = ctx.message?.text?.trim();
+    if (!text) return ctx.reply('Please write the number of guests:');
+
+    ctx.wizard.state.form.guests = text;
     await ctx.reply('Notes (optional). If none, write "no":');
-    return ctx.wizard.next();
+    return ctx.wizard.next(); // -> Paso 4
   },
+
+  // Paso 4: notas y envío
   async (ctx) => {
     const notes = ctx.message?.text?.trim() || '';
     const normalized = notes.toLowerCase();
-    ctx.wizard.state.form.notes =
-      normalized === 'no' || normalized === 'none' ? '' : notes;
+    ctx.wizard.state.form.notes = (normalized === 'no' || normalized === 'none') ? '' : notes;
 
     const f = ctx.wizard.state.form;
-    const from = `${ctx.from?.first_name || ''} ${ctx.from?.last_name || ''} (@${
-      ctx.from?.username || 'no_username'
-    })`;
+    const from = `${ctx.from?.first_name || ''} ${ctx.from?.last_name || ''} (@${ctx.from?.username || 'no_username'})`;
 
     const summary = `✅ <b>New reservation request</b>
 
@@ -79,13 +91,10 @@ const formWizard = new Scenes.WizardScene(
       console.error('Error sending to staff:', e.message);
     }
 
-    await ctx.reply(
-      '🎉 Done! We received your request.\nWe will contact you shortly here in private for the last details.'
-    );
+    await ctx.reply('🎉 Done! We received your request.\nWe will contact you shortly here in private for the last details.');
     return ctx.scene.leave();
   }
 );
-
 // —— Stage & session ——
 const stage = new Scenes.Stage([formWizard]);
 
@@ -93,10 +102,10 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 bot.use(session());
 bot.use(stage.middleware());
 
-// /start (with deep-link support to jump straight into the form)
+// /start — si viene con payload "form", entra al wizard; si no, muestra el botón
 bot.start(async (ctx) => {
   if (ctx.startPayload === 'form') {
-    return ctx.scene.enter('reservation-form');
+    return ctx.scene.enter('reservation-form'); // empieza desde el paso 0
   }
   const username = bot.botInfo?.username || 'your_bot_username';
   const link = `https://t.me/${username}?start=form`;
@@ -106,25 +115,34 @@ bot.start(async (ctx) => {
   );
 });
 
-// /panel: post the button (use it in your group/topic and pin it if you want)
+// /panel — publica el botón en el tema donde lo escribas (para pinearlo)
 bot.command('panel', async (ctx) => {
   const username = bot.botInfo?.username || 'your_bot_username';
   const link = `https://t.me/${username}?start=form`;
+
+  const replyOpts = {};
+  if (ctx.message?.is_topic_message && ctx.message?.message_thread_id) {
+    replyOpts.message_thread_id = ctx.message.message_thread_id; // queda en ese tema
+  }
+
   await ctx.reply(
     'Press to open the reservation form (opens in a private chat):',
-    Markup.inlineKeyboard([Markup.button.url('📝 Open reservation form', link)])
+    {
+      ...replyOpts,
+      reply_markup: Markup.inlineKeyboard([
+        Markup.button.url('📝 Open reservation form', link),
+      ]).reply_markup
+    }
   );
 });
 
-// /cancel: exit the form
+// /cancel — salir de la escena
 bot.command('cancel', async (ctx) => {
   await ctx.reply('Form canceled. You can start again anytime with /start.');
-  try {
-    await ctx.scene.leave();
-  } catch (_) {}
+  try { await ctx.scene.leave(); } catch (_) {}
 });
 
-// Launch (long polling) — good for Railway/Render worker to run 24/7
+// Launch
 bot.launch().then(() => console.log('Bot started ✅'));
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
