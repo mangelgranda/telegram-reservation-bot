@@ -1,6 +1,13 @@
 require('dotenv').config();
 const { Telegraf, session, Scenes, Markup } = require('telegraf');
 
+// Helper: escapar HTML para que nunca rompa el parseo
+const esc = (s = '') =>
+  String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
 // —— Wizard (form steps) ——
 const formWizard = new Scenes.WizardScene(
   'reservation-form',
@@ -44,28 +51,37 @@ const formWizard = new Scenes.WizardScene(
   async (ctx) => {
     const notes = ctx.message?.text?.trim() || '';
     const normalized = notes.toLowerCase();
-    ctx.wizard.state.form.notes = (normalized === 'no' || normalized === 'none') ? '' : notes;
+    ctx.wizard.state.form.notes =
+      normalized === 'no' || normalized === 'none' ? '' : notes;
 
     const f = ctx.wizard.state.form;
-    const summary =
-`✅ *New reservation request*
+    const from = `${ctx.from?.first_name || ''} ${ctx.from?.last_name || ''} (@${
+      ctx.from?.username || 'no_username'
+    })`;
 
-*Full name:* ${f.fullName}
-*Restaurant:* ${f.restaurant}
-*Date & time:* ${f.datetime}
-*Guests:* ${f.guests}
-*Notes:* ${f.notes || '—'}
+    const summary = `✅ <b>New reservation request</b>
 
-*From:* ${ctx.from?.first_name || ''} ${ctx.from?.last_name || ''} (@${ctx.from?.username || 'no_username'})`;
+<b>Full name:</b> ${esc(f.fullName)}
+<b>Restaurant:</b> ${esc(f.restaurant)}
+<b>Date & time:</b> ${esc(f.datetime)}
+<b>Guests:</b> ${esc(f.guests)}
+<b>Notes:</b> ${esc(f.notes || '—')}
+
+<b>From:</b> ${esc(from)}`;
 
     const staffId = process.env.STAFF_CHAT_ID;
     try {
-      await ctx.telegram.sendMessage(staffId, summary, { parse_mode: 'Markdown' });
+      await ctx.telegram.sendMessage(staffId, summary, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      });
     } catch (e) {
       console.error('Error sending to staff:', e.message);
     }
 
-    await ctx.reply('🎉 Done! We received your request.\nWe will contact you shortly here in private for the last details.');
+    await ctx.reply(
+      '🎉 Done! We received your request.\nWe will contact you shortly here in private for the last details.'
+    );
     return ctx.scene.leave();
   }
 );
@@ -103,7 +119,9 @@ bot.command('panel', async (ctx) => {
 // /cancel: exit the form
 bot.command('cancel', async (ctx) => {
   await ctx.reply('Form canceled. You can start again anytime with /start.');
-  try { await ctx.scene.leave(); } catch (_) {}
+  try {
+    await ctx.scene.leave();
+  } catch (_) {}
 });
 
 // Launch (long polling) — good for Railway/Render worker to run 24/7
